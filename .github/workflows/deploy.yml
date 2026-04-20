@@ -25,11 +25,22 @@ jobs:
 
       - name: Prepare deployment
         run: |
+          set -euo pipefail
           mkdir -p ./_site
-          cp -r docs/* ./_site/
-          mkdir -p ./_site/workshop/pt_BR ./_site/workshop/es
-          cp -r workshop/pt_BR/* ./_site/workshop/pt_BR/
-          cp -r workshop/es/* ./_site/workshop/es/
+
+          if [ -d docs ]; then
+            cp -r docs/. ./_site/
+          fi
+
+          if [ -d workshop/pt_BR ]; then
+            mkdir -p ./_site/workshop/pt_BR
+            cp -r workshop/pt_BR/. ./_site/workshop/pt_BR/
+          fi
+          if [ -d workshop/es ]; then
+            mkdir -p ./_site/workshop/es
+            cp -r workshop/es/. ./_site/workshop/es/
+          fi
+
           touch ./_site/.nojekyll
 
       - uses: actions/configure-pages@v4
