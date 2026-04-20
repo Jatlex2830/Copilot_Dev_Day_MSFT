@@ -1,0 +1,1168 @@
+---
+---
+
+<html lang="es">
+	<head>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width" />
+		<title>Mona Mayhem | Torneo</title>
+		<link rel="preconnect" href="https://fonts.googleapis.com" />
+		<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+		<link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap" rel="stylesheet" />
+	</head>
+	<body>
+		<header class="topbar">
+			<nav>
+				<a href="/">Inicio</a>
+				<a href="/tournament" aria-current="page">🏆 Torneo</a>
+			</nav>
+		</header>
+
+		<main class="arena">
+			<section id="setupView" class="view active">
+				<h1>Mona Mayhem Tournament</h1>
+				<p class="subtitle">Carga de jugadores para el bracket eliminatorio 1v1.</p>
+				<p id="setupInfo" class="chip"></p>
+				<div id="participantsGrid" class="participants-grid"></div>
+				<button id="startButton" class="action" disabled>Iniciar Torneo</button>
+			</section>
+
+			<section id="bracketView" class="view">
+				<div class="view-head">
+					<h2>Bracket</h2>
+					<button id="toSetup" class="ghost">Volver a setup</button>
+				</div>
+				<div id="bracketBoard" class="bracket-board"></div>
+			</section>
+
+			<section id="duelView" class="view">
+				<div class="view-head">
+					<h2>Duelo 1v1</h2>
+					<button id="toBracket" class="ghost">Ver bracket</button>
+				</div>
+				<div id="duelPanel" class="duel-panel"></div>
+				<div class="duel-actions">
+					<button id="nextDuel" class="action">Siguiente duelo</button>
+				</div>
+			</section>
+		</main>
+
+		<script type="module">
+			/** @typedef {{ username: string, displayName: string, funFact: string, isBye?: boolean }} Participant */
+			/** @typedef {{ id: string, round: number, index: number, p1: Participant | null, p2: Participant | null, winner: Participant | null, resolved: boolean, score1: number | null, score2: number | null }} Match */
+
+			const setupView = document.querySelector('#setupView');
+			const bracketView = document.querySelector('#bracketView');
+			const duelView = document.querySelector('#duelView');
+			const participantsGrid = document.querySelector('#participantsGrid');
+			const setupInfo = document.querySelector('#setupInfo');
+			const startButton = document.querySelector('#startButton');
+			const bracketBoard = document.querySelector('#bracketBoard');
+			const duelPanel = document.querySelector('#duelPanel');
+			const nextDuelButton = document.querySelector('#nextDuel');
+
+			/** @type {Participant[]} */
+			let participants = [];
+			/** @type {Match[][]} */
+			let rounds = [];
+			/** @type {Match | null} */
+			let activeMatch = null;
+			/** @type {Participant | null} */
+			let champion = null;
+
+			const views = { setup: setupView, bracket: bracketView, duel: duelView };
+
+			function showView(name) {
+				for (const key of Object.keys(views)) {
+					views[key].classList.toggle('active', key === name);
+				}
+			}
+
+			function shuffle(list) {
+				const arr = [...list];
+				for (let i = arr.length - 1; i > 0; i -= 1) {
+					const j = Math.floor(Math.random() * (i + 1));
+					[arr[i], arr[j]] = [arr[j], arr[i]];
+				}
+				return arr;
+			}
+
+			function bracketSizeFor(count) {
+				if (count <= 2) return 2;
+				if (count <= 4) return 4;
+				if (count <= 8) return 8;
+				return 16;
+			}
+
+			function safePlayerName(player) {
+				if (!player) return 'TBD';
+				if (player.isBye) return 'BYE';
+				return player.displayName;
+			}
+
+			function nextPlayableMatch() {
+				for (const round of rounds) {
+					for (const match of round) {
+						if (match.resolved) continue;
+						if (!match.p1 || !match.p2) continue;
+						if (match.p1.isBye || match.p2.isBye) continue;
+						return match;
+					}
+				}
+				return null;
+			}
+
+			function advanceWinner(match, winner, score1, score2) {
+				match.winner = winner;
+				match.resolved = true;
+				match.score1 = score1;
+				match.score2 = score2;
+
+				const isFinal = match.round === rounds.length - 1;
+				if (isFinal) {
+					champion = winner;
+					return;
+				}
+
+				const nextRound = rounds[match.round + 1];
+				const nextMatch = nextRound[Math.floor(match.index / 2)];
+				if (match.index % 2 === 0) {
+					nextMatch.p1 = winner;
+				} else {
+					nextMatch.p2 = winner;
+				}
+			}
+
+			function autoResolveByes() {
+				let changed = true;
+				while (changed) {
+					changed = false;
+					for (const round of rounds) {
+						for (const match of round) {
+							if (match.resolved || !match.p1 || !match.p2) continue;
+							if (!match.p1.isBye && !match.p2.isBye) continue;
+							const bye1 = Boolean(match.p1.isBye);
+							const bye2 = Boolean(match.p2.isBye);
+							const winner = bye1 && bye2 ? match.p1 : bye1 ? match.p2 : match.p1;
+							advanceWinner(match, winner, 0, 0);
+							changed = true;
+						}
+					}
+				}
+			}
+
+			function buildTournament() {
+				const size = bracketSizeFor(participants.length);
+				const pool = shuffle(participants).slice(0, size);
+				while (pool.length < size) {
+					pool.push({ username: 'bye', displayName: 'BYE', funFact: 'Pasa automático.', isBye: true });
+				}
+
+				rounds = [];
+				let slots = size;
+				let current = pool;
+				let roundNumber = 0;
+
+				while (slots >= 2) {
+					const matches = [];
+					for (let i = 0; i < slots; i += 2) {
+						matches.push({
+							id: `r${roundNumber + 1}m${i / 2 + 1}`,
+							round: roundNumber,
+							index: i / 2,
+							p1: current[i] ?? null,
+							p2: current[i + 1] ?? null,
+							winner: null,
+							resolved: false,
+							score1: null,
+							score2: null
+						});
+					}
+					rounds.push(matches);
+					slots /= 2;
+					current = Array.from({ length: slots }, () => null);
+					roundNumber += 1;
+				}
+
+				champion = null;
+				autoResolveByes();
+				activeMatch = nextPlayableMatch();
+				renderBracket();
+			}
+
+			function renderSetup() {
+				const size = bracketSizeFor(Math.max(2, participants.length));
+				setupInfo.textContent = `${participants.length} jugador(es) detectados. Bracket: ${size}.`;
+				startButton.disabled = participants.length < 2;
+
+				if (participants.length === 0) {
+					participantsGrid.innerHTML = '<p class="empty">No hay participantes válidos aún.</p>';
+					return;
+				}
+
+				participantsGrid.innerHTML = participants
+					.map((p) => `
+						<article class="participant-card">
+							<img src="https://github.com/${p.username}.png" alt="Avatar de ${p.username}" loading="lazy" />
+							<h3>${p.displayName}</h3>
+							<p class="username">@${p.username}</p>
+							<p>${p.funFact}</p>
+						</article>
+					`)
+					.join('');
+			}
+
+			function matchCard(match, isActive, canClick) {
+				const resolved = match.resolved && match.winner;
+				const crown1 = resolved && match.winner?.username === match.p1?.username ? '👑 ' : '';
+				const crown2 = resolved && match.winner?.username === match.p2?.username ? '👑 ' : '';
+				const clickable = canClick ? 'clickable' : '';
+				const stateClass = resolved ? 'resolved' : isActive ? 'active-match' : 'pending';
+				return `
+					<button class="match-card ${stateClass} ${clickable}" data-match-id="${match.id}" ${canClick ? '' : 'disabled'}>
+						<span>${crown1}${safePlayerName(match.p1)}</span>
+						<span>${crown2}${safePlayerName(match.p2)}</span>
+					</button>
+				`;
+			}
+
+			function renderBracket() {
+				const match = nextPlayableMatch();
+				activeMatch = match;
+				bracketBoard.innerHTML = rounds
+					.map((round, rIndex) => {
+						const title = rIndex === rounds.length - 1 ? 'Final' : `Ronda ${rIndex + 1}`;
+						return `
+							<div class="round-col">
+								<h3>${title}</h3>
+								${round
+									.map((item) => {
+										const isActive = Boolean(match && item.id === match.id);
+										const canClick = Boolean(
+											item.p1 && item.p2 && !item.p1.isBye && !item.p2.isBye &&
+											(!item.resolved || item.winner)
+										);
+										return matchCard(item, isActive, canClick);
+									})
+									.join('')}
+							</div>
+						`;
+					})
+					.join('');
+
+				bracketBoard.querySelectorAll('.match-card.clickable').forEach((button) => {
+					button.addEventListener('click', () => {
+						const id = button.getAttribute('data-match-id');
+						for (const round of rounds) {
+							const found = round.find((m) => m.id === id);
+							if (found) {
+								if (found.resolved && found.winner) {
+									showResolvedDuel(found);
+								} else {
+									activeMatch = found;
+									showDuel();
+								}
+								return;
+							}
+						}
+					});
+				});
+			}
+
+			async function fetchContributions(username) {
+				const response = await fetch(`/api/contributions/${encodeURIComponent(username)}`);
+				if (!response.ok) {
+					throw new Error(`No se pudieron cargar contribuciones de ${username}.`);
+				}
+				return response.json();
+			}
+
+			const delay = (ms) => new Promise((res) => setTimeout(res, ms));
+
+			function showResolvedDuel(match) {
+				showView('duel');
+				nextDuelButton.style.display = 'inline-flex';
+				nextDuelButton.disabled = false;
+
+				const leftScore = match.score1 ?? 0;
+				const rightScore = match.score2 ?? 0;
+				const max = Math.max(leftScore, rightScore, 1);
+				const leftHp = Math.round((leftScore / max) * 100);
+				const rightHp = Math.round((rightScore / max) * 100);
+				const loser = match.winner.username === match.p1.username ? match.p2 : match.p1;
+
+				duelPanel.innerHTML = `
+					${renderFighters(match.p1, match.p2)}
+					<div class="hp-section">
+						<div class="hp-row">
+							<span class="hp-label">${match.p1.displayName}</span>
+							<div class="hp-track"><div class="hp-fill${match.p1.username === loser.username ? ' hp-fill-loser' : ''}" style="width:${leftHp}%"></div></div>
+							<strong class="hp-num">${leftScore}</strong>
+						</div>
+						<div class="hp-row">
+							<span class="hp-label">${match.p2.displayName}</span>
+							<div class="hp-track"><div class="hp-fill${match.p2.username === loser.username ? ' hp-fill-loser' : ''}" style="width:${rightHp}%"></div></div>
+							<strong class="hp-num">${rightScore}</strong>
+						</div>
+					</div>
+					<div class="winner-banner winner-banner-visible">
+						👑 ${match.winner.displayName} <span class="banner-score">${Math.max(leftScore, rightScore)}</span>
+						&nbsp;·&nbsp;
+						${loser.displayName} <span class="banner-score loser-score">${Math.min(leftScore, rightScore)}</span>
+						<span class="replay-badge">resultado guardado</span>
+					</div>
+				`;
+
+				duelPanel.querySelector('.fighter-left')?.classList.add(
+					match.winner.username === match.p1.username ? 'fighter-winner' : 'fighter-loser'
+				);
+				duelPanel.querySelector('.fighter-right')?.classList.add(
+					match.winner.username === match.p2.username ? 'fighter-winner' : 'fighter-loser'
+				);
+			}
+
+			function renderFighters(p1, p2, extraClass = '') {
+				return `
+					<div class="fighters">
+						<div class="fighter fighter-left ${extraClass}">
+							<div class="avatar-wrap">
+								<img src="https://github.com/${p1.username}.png" alt="${p1.username}" />
+							</div>
+							<h3>${p1.displayName}</h3>
+							<p class="fighter-username">@${p1.username}</p>
+						</div>
+						<div class="versus-wrap">
+							<div class="versus">VS</div>
+						</div>
+						<div class="fighter fighter-right ${extraClass}">
+							<div class="avatar-wrap">
+								<img src="https://github.com/${p2.username}.png" alt="${p2.username}" />
+							</div>
+							<h3>${p2.displayName}</h3>
+							<p class="fighter-username">@${p2.username}</p>
+						</div>
+					</div>
+				`;
+			}
+
+			async function runCountdown() {
+				const overlay = duelPanel.querySelector('.countdown-overlay');
+				if (!overlay) return;
+				const steps = ['3', '2', '1', 'FIGHT!'];
+				for (const step of steps) {
+					overlay.textContent = step;
+					overlay.classList.remove('countdown-pop');
+					void overlay.offsetWidth;
+					overlay.classList.add('countdown-pop');
+					await delay(step === 'FIGHT!' ? 700 : 600);
+				}
+				overlay.classList.add('countdown-hide');
+				await delay(400);
+				overlay.remove();
+			}
+
+			async function animateHpBar(rowEl, targetPct, targetScore, isLoser) {
+				const fill = rowEl.querySelector('.hp-fill');
+				const num = rowEl.querySelector('.hp-num');
+				if (!fill || !num) return;
+				if (isLoser) fill.classList.add('hp-fill-loser');
+				const duration = 1400;
+				const start = performance.now();
+				await new Promise((res) => {
+					function tick(now) {
+						const t = Math.min((now - start) / duration, 1);
+						const eased = t < 0.5 ? 2 * t * t : -1 + (4 - 2 * t) * t;
+						fill.style.width = (eased * targetPct) + '%';
+						num.textContent = String(Math.round(eased * targetScore));
+						if (t < 1) requestAnimationFrame(tick);
+						else res();
+					}
+					requestAnimationFrame(tick);
+				});
+			}
+
+			function buildHpRow(label, isLoser) {
+				return `
+					<div class="hp-row">
+						<span class="hp-label">${label}</span>
+						<div class="hp-track"><div class="hp-fill${isLoser ? ' hp-fill-loser' : ''}"></div></div>
+						<strong class="hp-num">0</strong>
+					</div>
+				`;
+			}
+
+			function renderChampion() {
+				duelPanel.innerHTML = `
+					<div class="champion-screen">
+						<div class="champion-sparks"></div>
+						<h3 class="champion-title">🏆 CAMPEON</h3>
+						<div class="champion-avatar-wrap">
+							<img src="https://github.com/${champion.username}.png" alt="${champion.username}" class="champion-img" />
+						</div>
+						<p class="champion-name">${champion.displayName}</p>
+						<p class="champion-user">@${champion.username}</p>
+					</div>
+				`;
+				nextDuelButton.style.display = 'none';
+			}
+
+			async function showDuel() {
+				if (!activeMatch) {
+					showView('bracket');
+					return;
+				}
+
+				showView('duel');
+				nextDuelButton.style.display = 'inline-flex';
+				nextDuelButton.disabled = true;
+
+				const match = activeMatch;
+
+				/* ── Phase 1: fighters enter ── */
+				duelPanel.innerHTML = `
+					${renderFighters(match.p1, match.p2, 'entering')}
+					<div class="countdown-overlay"></div>
+				`;
+				await delay(80);
+				duelPanel.querySelectorAll('.fighter').forEach((el) => el.classList.remove('entering'));
+
+				/* ── Phase 2: countdown ── */
+				await runCountdown();
+
+				/* ── Phase 3: scanning label ── */
+				duelPanel.innerHTML = `
+					${renderFighters(match.p1, match.p2)}
+					<div class="scanning-bar">
+						<span class="scanning-text">Escaneando GitHub</span>
+						<span class="scanning-dots">...</span>
+					</div>
+				`;
+
+				let dotInterval;
+				const dots = duelPanel.querySelector('.scanning-dots');
+				let dotCount = 0;
+				dotInterval = setInterval(() => {
+					dotCount = (dotCount + 1) % 4;
+					if (dots) dots.textContent = '.'.repeat(dotCount) || '...';
+				}, 300);
+
+				try {
+					const [left, right] = await Promise.all([
+						fetchContributions(match.p1.username),
+						fetchContributions(match.p2.username)
+					]);
+					clearInterval(dotInterval);
+
+					const leftScore = Number(left.totalContributions ?? 0);
+					const rightScore = Number(right.totalContributions ?? 0);
+					const max = Math.max(leftScore, rightScore, 1);
+					const leftHp = Math.round((leftScore / max) * 100);
+					const rightHp = Math.round((rightScore / max) * 100);
+					const winner = leftScore >= rightScore ? match.p1 : match.p2;
+					const loser = winner.username === match.p1.username ? match.p2 : match.p1;
+
+					/* ── Phase 4: HP bars fill up ── */
+					duelPanel.innerHTML = `
+						${renderFighters(match.p1, match.p2)}
+						<div class="hp-section">
+							${buildHpRow(match.p1.displayName, match.p1.username === loser.username)}
+							${buildHpRow(match.p2.displayName, match.p2.username === loser.username)}
+						</div>
+					`;
+					await delay(200);
+					const rows = duelPanel.querySelectorAll('.hp-row');
+					await Promise.all([
+						animateHpBar(rows[0], leftHp, leftScore, match.p1.username === loser.username),
+						animateHpBar(rows[1], rightHp, rightScore, match.p2.username === loser.username)
+					]);
+					await delay(500);
+
+					/* ── Phase 5: winner flash ── */
+					advanceWinner(match, winner, leftScore, rightScore);
+					autoResolveByes();
+
+					const winnerSide = winner.username === match.p1.username ? 'left' : 'right';
+					const loserSide = winnerSide === 'left' ? 'right' : 'left';
+					duelPanel.querySelector(`.fighter-${winnerSide}`)?.classList.add('fighter-winner');
+					duelPanel.querySelector(`.fighter-${loserSide}`)?.classList.add('fighter-loser');
+					duelPanel.innerHTML += `<div class="flash-overlay"></div>`;
+					await delay(120);
+					duelPanel.querySelector('.flash-overlay')?.remove();
+					await delay(300);
+
+					/* ── Phase 6: winner banner ── */
+					const banner = document.createElement('div');
+					banner.className = 'winner-banner winner-banner-anim';
+					banner.innerHTML = `👑 ${winner.displayName} <span class="banner-score">${Math.max(leftScore, rightScore)}</span> &nbsp;·&nbsp; ${loser.displayName} <span class="banner-score loser-score">${Math.min(leftScore, rightScore)}</span>`;
+					duelPanel.appendChild(banner);
+					await delay(80);
+					banner.classList.add('winner-banner-visible');
+
+					renderBracket();
+					activeMatch = nextPlayableMatch();
+					nextDuelButton.disabled = false;
+
+					if (!activeMatch && champion) {
+						await delay(1800);
+						renderChampion();
+					}
+				} catch (error) {
+					clearInterval(dotInterval);
+					duelPanel.innerHTML = `<p class="error">${error instanceof Error ? error.message : 'Error inesperado en duelo.'}</p>`;
+					nextDuelButton.disabled = true;
+				}
+			}
+
+			async function loadParticipants() {
+				try {
+					const response = await fetch('/api/participants');
+					const data = await response.json();
+					if (!Array.isArray(data)) {
+						participants = [];
+						renderSetup();
+						return;
+					}
+					participants = data
+						.filter((item) => item && item.username && item.displayName && item.funFact)
+						.map((item) => ({
+							username: String(item.username),
+							displayName: String(item.displayName),
+							funFact: String(item.funFact)
+						}));
+					renderSetup();
+				} catch {
+					participants = [];
+					renderSetup();
+				}
+			}
+
+			startButton.addEventListener('click', () => {
+				buildTournament();
+				showView('bracket');
+			});
+
+			document.querySelector('#toSetup').addEventListener('click', () => showView('setup'));
+			document.querySelector('#toBracket').addEventListener('click', () => showView('bracket'));
+			nextDuelButton.addEventListener('click', () => {
+				if (!activeMatch && champion) {
+					showView('bracket');
+					return;
+				}
+				if (activeMatch) {
+					showDuel();
+				}
+			});
+
+			loadParticipants();
+		</script>
+	</body>
+</html>
+
+<style is:global>
+	:root {
+		--bg-dark: #0a0a0f;
+		--bg-card: #12121a;
+		--neon-cyan: #00f5ff;
+		--neon-magenta: #ff00ff;
+		--neon-purple: #b366ff;
+		--text-primary: #ffffff;
+		--text-secondary: #a0a0b0;
+		--border-color: #2a2a3a;
+	}
+
+	* {
+		box-sizing: border-box;
+	}
+
+	body {
+		margin: 0;
+		font-family: 'Press Start 2P', cursive;
+		background: radial-gradient(circle at 15% 15%, #1b1b2d 0%, var(--bg-dark) 38%, #050507 100%);
+		color: var(--text-primary);
+		min-height: 100vh;
+	}
+
+	body::after {
+		content: '';
+		position: fixed;
+		inset: 0;
+		pointer-events: none;
+		opacity: 0.2;
+		background: repeating-linear-gradient(
+			to bottom,
+			rgba(255, 255, 255, 0.03) 0,
+			rgba(255, 255, 255, 0.03) 2px,
+			transparent 3px,
+			transparent 6px
+		);
+	}
+
+	.topbar {
+		position: sticky;
+		top: 0;
+		z-index: 10;
+		padding: 1rem;
+		background: rgba(10, 10, 15, 0.85);
+		backdrop-filter: blur(4px);
+		border-bottom: 1px solid var(--border-color);
+	}
+
+	nav {
+		display: flex;
+		gap: 1rem;
+		justify-content: center;
+	}
+
+	nav a {
+		text-decoration: none;
+		color: var(--text-secondary);
+		font-size: 0.65rem;
+		padding: 0.6rem 0.9rem;
+		border: 1px solid var(--border-color);
+		border-radius: 8px;
+	}
+
+	nav a[aria-current='page'],
+	nav a:hover {
+		color: var(--bg-dark);
+		background: linear-gradient(90deg, var(--neon-cyan), var(--neon-magenta));
+		border-color: transparent;
+	}
+
+	.arena {
+		max-width: 1200px;
+		margin: 0 auto;
+		padding: 1.5rem;
+	}
+
+	.view {
+		display: none;
+		animation: pop 0.25s ease;
+	}
+
+	.view.active {
+		display: block;
+	}
+
+	@keyframes pop {
+		from {
+			opacity: 0;
+			transform: translateY(8px);
+		}
+		to {
+			opacity: 1;
+			transform: translateY(0);
+		}
+	}
+
+	h1,
+	h2,
+	h3 {
+		line-height: 1.4;
+	}
+
+	h1 {
+		font-size: 1.1rem;
+		margin-bottom: 1rem;
+	}
+
+	.subtitle {
+		font-size: 0.62rem;
+		color: var(--text-secondary);
+		margin-bottom: 1rem;
+	}
+
+	.chip {
+		display: inline-block;
+		padding: 0.6rem 0.9rem;
+		font-size: 0.58rem;
+		background: #101022;
+		border: 1px solid var(--border-color);
+		border-radius: 999px;
+		margin-bottom: 1rem;
+	}
+
+	.participants-grid {
+		display: grid;
+		grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+		gap: 1rem;
+		margin-bottom: 1.4rem;
+	}
+
+	.participant-card {
+		padding: 1rem;
+		background: var(--bg-card);
+		border: 1px solid var(--border-color);
+		border-radius: 12px;
+	}
+
+	.participant-card img {
+		width: 70px;
+		height: 70px;
+		border-radius: 10px;
+		margin-bottom: 0.8rem;
+	}
+
+	.participant-card h3 {
+		font-size: 0.68rem;
+		margin: 0 0 0.4rem;
+	}
+
+	.participant-card p {
+		font-size: 0.52rem;
+		line-height: 1.6;
+		margin: 0;
+		color: var(--text-secondary);
+	}
+
+	.participant-card .username {
+		color: var(--neon-cyan);
+		margin-bottom: 0.5rem;
+	}
+
+	.action,
+	.ghost {
+		font-family: inherit;
+		font-size: 0.6rem;
+		padding: 0.75rem 1rem;
+		border-radius: 10px;
+		cursor: pointer;
+	}
+
+	.action {
+		color: #020211;
+		border: none;
+		background: linear-gradient(90deg, var(--neon-cyan), var(--neon-magenta));
+	}
+
+	.action:disabled {
+		cursor: not-allowed;
+		opacity: 0.45;
+	}
+
+	.ghost {
+		color: var(--text-secondary);
+		border: 1px solid var(--border-color);
+		background: transparent;
+	}
+
+	.view-head {
+		display: flex;
+		justify-content: space-between;
+		align-items: center;
+		gap: 1rem;
+		margin-bottom: 1rem;
+	}
+
+	.bracket-board {
+		display: grid;
+		grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+		gap: 1rem;
+	}
+
+	.round-col {
+		background: rgba(18, 18, 26, 0.75);
+		border: 1px solid var(--border-color);
+		border-radius: 12px;
+		padding: 0.8rem;
+	}
+
+	.round-col h3 {
+		font-size: 0.56rem;
+		margin: 0 0 0.8rem;
+		color: var(--neon-cyan);
+	}
+
+	.match-card {
+		width: 100%;
+		text-align: left;
+		border-radius: 10px;
+		padding: 0.65rem;
+		border: 1px solid var(--border-color);
+		background: #0e0e1a;
+		color: var(--text-primary);
+		margin-bottom: 0.6rem;
+		display: grid;
+		gap: 0.5rem;
+		font-family: inherit;
+		font-size: 0.5rem;
+	}
+
+	.match-card.pending {
+		opacity: 0.75;
+	}
+
+	.match-card.active-match {
+		border-color: var(--neon-magenta);
+		box-shadow: 0 0 0 1px var(--neon-magenta), 0 0 14px rgba(255, 0, 255, 0.45);
+	}
+
+	.match-card.resolved {
+		border-color: #2a7f55;
+	}
+
+	.match-card:disabled {
+		cursor: default;
+	}
+
+	.duel-panel {
+		background: var(--bg-card);
+		border: 1px solid var(--border-color);
+		border-radius: 14px;
+		padding: 1rem;
+	}
+
+	/* ── Fighters layout ── */
+	.fighters {
+		display: grid;
+		grid-template-columns: 1fr auto 1fr;
+		align-items: center;
+		gap: 0.8rem;
+		margin-bottom: 1.2rem;
+		position: relative;
+	}
+
+	.fighter {
+		text-align: center;
+		transition: opacity 0.5s ease, transform 0.5s ease;
+	}
+
+	.fighter.entering.fighter-left {
+		transform: translateX(-80px);
+		opacity: 0;
+	}
+	.fighter.entering.fighter-right {
+		transform: translateX(80px);
+		opacity: 0;
+	}
+
+	.fighter-left {
+		transform: translateX(0);
+		opacity: 1;
+	}
+	.fighter-right {
+		transform: translateX(0);
+		opacity: 1;
+	}
+
+	.fighter.fighter-winner .avatar-wrap {
+		animation: winner-pulse 0.5s steps(2) 3;
+	}
+	.fighter.fighter-loser {
+		filter: grayscale(1) brightness(0.45);
+		transform: scale(0.92);
+		transition: filter 0.5s ease, transform 0.5s ease;
+	}
+
+	@keyframes winner-pulse {
+		0%   { box-shadow: 0 0 0 3px var(--neon-cyan); }
+		50%  { box-shadow: 0 0 18px 6px var(--neon-cyan); }
+		100% { box-shadow: 0 0 0 3px var(--neon-cyan); }
+	}
+
+	.avatar-wrap {
+		display: inline-block;
+		position: relative;
+		border-radius: 12px;
+		overflow: hidden;
+	}
+
+	.avatar-wrap img {
+		width: 108px;
+		height: 108px;
+		border: 2px solid var(--border-color);
+		border-radius: 12px;
+		display: block;
+		image-rendering: pixelated;
+	}
+
+	.fighter h3 {
+		font-size: 0.58rem;
+		margin-top: 0.8rem;
+		margin-bottom: 0;
+	}
+
+	.fighter-username {
+		font-size: 0.46rem;
+		color: var(--neon-cyan);
+		margin: 0.3rem 0 0;
+	}
+
+	/* ── VS ── */
+	.versus-wrap {
+		display: flex;
+		align-items: center;
+		justify-content: center;
+	}
+
+	.versus {
+		font-size: 1.1rem;
+		color: var(--neon-magenta);
+		text-shadow: 0 0 8px var(--neon-magenta), 0 0 20px rgba(255,0,255,0.5);
+		animation: vs-flicker 1.8s steps(2) infinite;
+	}
+
+	@keyframes vs-flicker {
+		0%, 90%, 100% { opacity: 1; }
+		92%, 96%      { opacity: 0.2; }
+	}
+
+	/* ── Countdown overlay ── */
+	.countdown-overlay {
+		position: absolute;
+		inset: 0;
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		font-size: 2.4rem;
+		color: var(--neon-cyan);
+		text-shadow: 0 0 14px var(--neon-cyan), 0 0 40px rgba(0,245,255,0.6);
+		pointer-events: none;
+		z-index: 5;
+		background: rgba(10,10,15,0.7);
+		border-radius: 14px;
+	}
+
+	.countdown-pop {
+		animation: cpop 0.45s steps(4) forwards;
+	}
+
+	.countdown-hide {
+		animation: cfade 0.3s steps(3) forwards;
+	}
+
+	@keyframes cpop {
+		0%   { transform: scale(0.4); opacity: 0; }
+		40%  { transform: scale(1.25); opacity: 1; }
+		70%  { transform: scale(0.95); }
+		100% { transform: scale(1); opacity: 1; }
+	}
+
+	@keyframes cfade {
+		to { opacity: 0; transform: scale(1.6); }
+	}
+
+	/* ── Scanning bar ── */
+	.scanning-bar {
+		display: flex;
+		align-items: center;
+		gap: 0.4rem;
+		padding: 0.6rem 0.8rem;
+		border: 1px solid var(--neon-cyan);
+		border-radius: 8px;
+		background: rgba(0,245,255,0.05);
+		margin-top: 0.4rem;
+	}
+
+	.scanning-text {
+		font-size: 0.54rem;
+		color: var(--neon-cyan);
+	}
+
+	.scanning-dots {
+		font-size: 0.54rem;
+		color: var(--neon-cyan);
+		width: 1.4rem;
+	}
+
+	/* ── HP bars ── */
+	.hp-section {
+		margin-top: 0.3rem;
+	}
+
+	.hp-row {
+		display: grid;
+		grid-template-columns: 130px 1fr 68px;
+		align-items: center;
+		gap: 0.7rem;
+		font-size: 0.5rem;
+		margin-bottom: 0.7rem;
+	}
+
+	.hp-label {
+		truncate: ellipsis;
+		overflow: hidden;
+		white-space: nowrap;
+	}
+
+	.hp-track {
+		height: 12px;
+		border: 1px solid var(--border-color);
+		border-radius: 2px;
+		overflow: hidden;
+		image-rendering: pixelated;
+		background: #0a0a0f;
+	}
+
+	.hp-fill {
+		height: 100%;
+		width: 0;
+		background: linear-gradient(90deg, #00f570, #6dff43);
+		box-shadow: inset 0 0 6px rgba(255,255,255,0.3);
+		image-rendering: pixelated;
+	}
+
+	.hp-fill.hp-fill-loser {
+		background: linear-gradient(90deg, #ff4545, #ff7b00);
+	}
+
+	.hp-num {
+		color: var(--neon-cyan);
+		font-variant-numeric: tabular-nums;
+		min-width: 60px;
+		text-align: right;
+	}
+
+	/* ── Flash overlay ── */
+	.flash-overlay {
+		position: absolute;
+		inset: 0;
+		background: rgba(255,255,255,0.18);
+		border-radius: 14px;
+		animation: flash 0.12s steps(2) 1;
+		pointer-events: none;
+		z-index: 10;
+	}
+
+	@keyframes flash {
+		to { opacity: 0; }
+	}
+
+	/* ── Winner banner ── */
+	.winner-banner {
+		margin-top: 0.9rem;
+		padding: 0.75rem 1rem;
+		border-radius: 10px;
+		border: 1px solid var(--neon-cyan);
+		font-size: 0.52rem;
+		line-height: 1.7;
+		background: rgba(0,245,255,0.07);
+		text-shadow: 0 0 8px var(--neon-cyan);
+		opacity: 0;
+		transform: translateY(12px);
+		transition: opacity 0.4s steps(4), transform 0.4s ease;
+	}
+
+	.winner-banner.winner-banner-visible {
+		opacity: 1;
+		transform: translateY(0);
+	}
+
+	.replay-badge {
+		display: inline-block;
+		margin-left: 0.6rem;
+		padding: 0.2rem 0.5rem;
+		font-size: 0.42rem;
+		border: 1px solid var(--border-color);
+		border-radius: 4px;
+		color: var(--text-secondary);
+		vertical-align: middle;
+	}
+
+	.banner-score {
+		color: var(--neon-cyan);
+	}
+
+	.loser-score {
+		color: var(--text-secondary);
+	}
+
+	/* ── Champion ── */
+	.champion-screen {
+		text-align: center;
+		padding: 1rem;
+		position: relative;
+		overflow: hidden;
+	}
+
+	.champion-title {
+		font-size: 0.75rem;
+		margin-bottom: 1rem;
+		color: #ffde59;
+		text-shadow: 0 0 10px #ffde59, 0 0 30px rgba(255,222,89,0.6);
+		animation: titleGlow 1s steps(2) infinite;
+	}
+
+	@keyframes titleGlow {
+		50% { text-shadow: 0 0 20px #ffde59, 0 0 50px rgba(255,222,89,0.9); }
+	}
+
+	.champion-avatar-wrap {
+		display: inline-block;
+		border-radius: 50%;
+		padding: 6px;
+		background: linear-gradient(135deg, #ffde59, #ff9d00);
+		animation: champSpin 4s linear infinite;
+		margin-bottom: 0.8rem;
+	}
+
+	@keyframes champSpin {
+		from { box-shadow: 0 0 0 3px #ffde59, 0 0 22px rgba(255,222,89,0.4); }
+		50%  { box-shadow: 0 0 0 6px #ff9d00, 0 0 40px rgba(255,157,0,0.7); }
+		to   { box-shadow: 0 0 0 3px #ffde59, 0 0 22px rgba(255,222,89,0.4); }
+	}
+
+	.champion-img {
+		width: 130px;
+		height: 130px;
+		border-radius: 50%;
+		display: block;
+		image-rendering: pixelated;
+	}
+
+	.champion-name {
+		font-size: 0.65rem;
+		margin: 0.4rem 0 0;
+		color: #ffde59;
+	}
+
+	.champion-user {
+		font-size: 0.5rem;
+		color: var(--text-secondary);
+		margin: 0.3rem 0 0;
+	}
+
+	.duel-actions {
+		display: flex;
+		justify-content: flex-end;
+		margin-top: 1rem;
+	}
+
+	.empty,
+	.error {
+		font-size: 0.58rem;
+		color: var(--text-secondary);
+	}
+
+	.error {
+		color: #ff8e8e;
+	}
+
+	@media (max-width: 720px) {
+		nav a {
+			font-size: 0.55rem;
+		}
+
+		.fighters {
+			grid-template-columns: 1fr;
+			text-align: center;
+		}
+
+		.versus-wrap {
+			order: 3;
+		}
+
+		.hp-row {
+			grid-template-columns: 1fr;
+		}
+
+		.hp-label {
+			display: none;
+		}
+
+		.view-head {
+			flex-direction: column;
+			align-items: flex-start;
+		}
+	}
+</style>

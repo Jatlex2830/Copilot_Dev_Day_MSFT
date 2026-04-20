@@ -1,0 +1,141 @@
+name: Auto Merge Participant PR
+
+on:
+  pull_request:
+    types: [opened, synchronize]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  validate-and-merge:
+    runs-on: ubuntu-latest
+
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      PR_NUMBER: ${{ github.event.pull_request.number }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Detectar archivos cambiados
+        id: changes
+        shell: bash
+        run: |
+          set -e
+          git fetch origin main --depth=1
+          files=$(git diff --name-only origin/main...HEAD | tr '\n' ' ' | xargs)
+          count=$(echo "$files" | wc -w | xargs)
+          file=$(echo "$files" | awk '{print $1}')
+
+          echo "files=$files" >> "$GITHUB_OUTPUT"
+          echo "count=$count" >> "$GITHUB_OUTPUT"
+          echo "file=$file" >> "$GITHUB_OUTPUT"
+
+      - name: Validar que el PR solo toca UN archivo en participants
+        id: validate_scope
+        shell: bash
+        run: |
+          set -e
+          count="${{ steps.changes.outputs.count }}"
+          file="${{ steps.changes.outputs.file }}"
+
+          if [[ "$count" != "1" ]]; then
+            gh pr comment "$PR_NUMBER" --body "❌ Este PR debe modificar exactamente un archivo dentro de participants/. Detecté $count archivos."
+            echo "valid=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if [[ ! "$file" =~ ^participants/.+\.json$ ]]; then
+            gh pr comment "$PR_NUMBER" --body "❌ El archivo debe estar dentro de participants/ y tener extensión .json. Archivo detectado: $file"
+            echo "valid=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if [[ ! -f "$file" ]]; then
+            gh pr comment "$PR_NUMBER" --body "❌ No encontré el archivo esperado en el checkout del PR: $file"
+            echo "valid=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          file_username="$(basename "$file" .json)"
+          json_username="$(node -e "const fs=require('fs');const p=process.argv[1];try{const d=JSON.parse(fs.readFileSync(p,'utf8'));process.stdout.write(String(d.username ?? ''));}catch{process.stdout.write('');}" "$file")"
+
+          if [[ -z "$json_username" ]]; then
+            gh pr comment "$PR_NUMBER" --body "❌ No se pudo leer el campo username del JSON en $file"
+            echo "valid=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if [[ "$file_username" != "$json_username" ]]; then
+            gh pr comment "$PR_NUMBER" --body "❌ El nombre del archivo y el campo username deben coincidir. Archivo: $file_username, JSON: $json_username"
+            echo "valid=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "valid=true" >> "$GITHUB_OUTPUT"
+          echo "file=$file" >> "$GITHUB_OUTPUT"
+          echo "username=$json_username" >> "$GITHUB_OUTPUT"
+
+      - name: Validar contenido del JSON
+        id: validate_json
+        if: steps.validate_scope.outputs.valid == 'true'
+        shell: bash
+        run: |
+          set -e
+          file="${{ steps.validate_scope.outputs.file }}"
+
+          validation_output="$(node -e "const fs=require('fs');const p=process.argv[1];try{const d=JSON.parse(fs.readFileSync(p,'utf8'));const missing=['username','displayName','funFact'].filter((k)=>typeof d[k]!=='string'||d[k].trim()==='');if(missing.length){console.log('missing:'+missing.join(','));process.exit(0);}if(/\s/.test(d.username)){console.log('username-spaces');process.exit(0);}console.log('ok');}catch(e){console.log('invalid-json');}" "$file")"
+
+          if [[ "$validation_output" != "ok" ]]; then
+            case "$validation_output" in
+              missing:*)
+                fields="${validation_output#missing:}"
+                gh pr comment "$PR_NUMBER" --body "❌ Faltan campos obligatorios o están vacíos: $fields"
+                ;;
+              username-spaces)
+                gh pr comment "$PR_NUMBER" --body "❌ El campo username debe ser un string sin espacios."
+                ;;
+              invalid-json)
+                gh pr comment "$PR_NUMBER" --body "❌ El archivo JSON no es válido. Revisa comas, comillas y estructura."
+                ;;
+              *)
+                gh pr comment "$PR_NUMBER" --body "❌ Validación de JSON falló: $validation_output"
+                ;;
+            esac
+            echo "valid=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "valid=true" >> "$GITHUB_OUTPUT"
+
+      - name: Verificar que el username de GitHub existe
+        id: validate_user
+        if: steps.validate_json.outputs.valid == 'true'
+        shell: bash
+        run: |
+          set -e
+          username="${{ steps.validate_scope.outputs.username }}"
+          status_code="$(curl -s -o /dev/null -w '%{http_code}' "https://api.github.com/users/$username")"
+
+          if [[ "$status_code" != "200" ]]; then
+            gh pr comment "$PR_NUMBER" --body "❌ El usuario de GitHub @$username no existe o no es accesible (HTTP $status_code)."
+            echo "valid=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "valid=true" >> "$GITHUB_OUTPUT"
+
+      - name: Auto-merge si todo pasó
+        if: steps.validate_user.outputs.valid == 'true'
+        shell: bash
+        run: |
+          set -e
+          username="${{ steps.validate_scope.outputs.username }}"
+          gh pr merge "$PR_NUMBER" --squash --auto --repo "${{ github.repository }}"
+          gh pr comment "$PR_NUMBER" --body "✅ ¡Bienvenido al torneo, @$username! Tu perfil fue agregado automáticamente."

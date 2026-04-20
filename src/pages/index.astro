@@ -2,16 +2,385 @@
 
 ---
 
-<html lang="en">
+<html lang="es">
 	<head>
 		<meta charset="utf-8" />
 		<link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+		<link rel="preconnect" href="https://fonts.googleapis.com" />
+		<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+		<link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap" rel="stylesheet" />
 		<meta name="viewport" content="width=device-width" />
 		<meta name="generator" content={Astro.generator} />
-		<title>Mona Mayhem</title>
+		<title>Mona Mayhem — GitHub Battle Arena</title>
 	</head>
 	<body>
-		<h1>Mona Mayhem</h1>
-		<p>Welcome to Mona Mayhem! Time to build a GitHub Contribution Battle Arena.</p>
+		<!-- scanlines -->
+		<div class="scanlines" aria-hidden="true"></div>
+
+		<header class="topbar">
+			<nav>
+				<a href="/" aria-current="page">Inicio</a>
+				<a href="/tournament">🏆 Torneo</a>
+			</nav>
+		</header>
+
+		<main class="hero">
+			<div class="hero-glow" aria-hidden="true"></div>
+
+			<p class="pre-title">GitHub Copilot Dev Days</p>
+
+			<h1 class="title">
+				<span class="title-mona">MONA</span>
+				<span class="title-mayhem">MAYHEM</span>
+			</h1>
+
+			<p class="tagline">GitHub Contribution Battle Arena</p>
+
+			<div class="divider" aria-hidden="true">
+				<span></span><span class="diamond">◆</span><span></span>
+			</div>
+
+			<p class="description">
+				Dos desarrolladores entran.<br />Solo uno sale campeón.
+			</p>
+
+			<a href="/tournament" class="cta-btn">
+				<span class="cta-icon">🏆</span> Iniciar Torneo
+			</a>
+
+			<div class="stats-row">
+				<div class="stat">
+					<span class="stat-val" id="playerCount">—</span>
+					<span class="stat-label">Participantes</span>
+				</div>
+				<div class="stat-sep">|</div>
+				<div class="stat">
+					<span class="stat-val" id="bracketSize">—</span>
+					<span class="stat-label">Bracket</span>
+				</div>
+				<div class="stat-sep">|</div>
+				<div class="stat">
+					<span class="stat-val">1v1</span>
+					<span class="stat-label">Formato</span>
+				</div>
+			</div>
+		</main>
+
+		<footer class="footer">
+			<span>Powered by GitHub Copilot</span>
+			<span class="sep">·</span>
+			<a href="https://github.com/features/copilot" target="_blank" rel="noopener">github.com/copilot</a>
+		</footer>
+
+		<script type="module">
+			async function loadStats() {
+				try {
+					const res = await fetch('/api/participants');
+					const data = await res.json();
+					const count = Array.isArray(data) ? data.length : 0;
+					const size = count <= 2 ? 2 : count <= 4 ? 4 : count <= 8 ? 8 : 16;
+					document.querySelector('#playerCount').textContent = String(count);
+					document.querySelector('#bracketSize').textContent = String(size);
+				} catch {
+					// silently ignore
+				}
+			}
+			loadStats();
+		</script>
 	</body>
 </html>
+
+<style>
+	:root {
+		--bg: #0a0a0f;
+		--bg-card: #12121a;
+		--cyan: #00f5ff;
+		--magenta: #ff00ff;
+		--purple: #b366ff;
+		--text: #ffffff;
+		--muted: #a0a0b0;
+		--border: #2a2a3a;
+	}
+
+	* { box-sizing: border-box; margin: 0; padding: 0; }
+
+	body {
+		font-family: 'Press Start 2P', monospace;
+		background: var(--bg);
+		color: var(--text);
+		min-height: 100vh;
+		display: flex;
+		flex-direction: column;
+		overflow-x: hidden;
+	}
+
+	/* ── Scanlines ── */
+	.scanlines {
+		position: fixed;
+		inset: 0;
+		pointer-events: none;
+		z-index: 0;
+		background: repeating-linear-gradient(
+			to bottom,
+			rgba(255,255,255,0.025) 0,
+			rgba(255,255,255,0.025) 1px,
+			transparent 2px,
+			transparent 5px
+		);
+	}
+
+	/* ── Topbar ── */
+	.topbar {
+		position: sticky;
+		top: 0;
+		z-index: 10;
+		padding: 1rem 2rem;
+		background: rgba(10,10,15,0.88);
+		backdrop-filter: blur(6px);
+		border-bottom: 1px solid var(--border);
+	}
+
+	nav {
+		display: flex;
+		gap: 0.8rem;
+		justify-content: center;
+	}
+
+	nav a {
+		font-size: 0.6rem;
+		text-decoration: none;
+		padding: 0.55rem 1rem;
+		border: 1px solid var(--border);
+		border-radius: 6px;
+		color: var(--muted);
+		transition: all 0.15s steps(3);
+	}
+
+	nav a[aria-current='page'],
+	nav a:hover {
+		color: var(--bg);
+		background: linear-gradient(90deg, var(--cyan), var(--magenta));
+		border-color: transparent;
+	}
+
+	/* ── Hero ── */
+	.hero {
+		flex: 1;
+		display: flex;
+		flex-direction: column;
+		align-items: center;
+		justify-content: center;
+		text-align: center;
+		padding: 3rem 2rem;
+		position: relative;
+		z-index: 1;
+	}
+
+	/* radial glow behind title */
+	.hero-glow {
+		position: absolute;
+		top: 30%;
+		left: 50%;
+		transform: translate(-50%, -50%);
+		width: 600px;
+		height: 600px;
+		border-radius: 50%;
+		background: radial-gradient(
+			circle,
+			rgba(0,245,255,0.07) 0%,
+			rgba(179,102,255,0.05) 40%,
+			transparent 70%
+		);
+		pointer-events: none;
+	}
+
+	.pre-title {
+		font-size: 0.5rem;
+		color: var(--cyan);
+		letter-spacing: 0.18em;
+		text-transform: uppercase;
+		margin-bottom: 1.4rem;
+		border: 1px solid rgba(0,245,255,0.3);
+		padding: 0.4rem 1rem;
+		border-radius: 999px;
+		background: rgba(0,245,255,0.06);
+	}
+
+	.title {
+		display: flex;
+		flex-direction: column;
+		line-height: 1.15;
+		margin-bottom: 1.2rem;
+	}
+
+	.title-mona {
+		font-size: clamp(2rem, 8vw, 4rem);
+		background: linear-gradient(135deg, var(--cyan) 0%, var(--purple) 100%);
+		-webkit-background-clip: text;
+		-webkit-text-fill-color: transparent;
+		background-clip: text;
+		filter: drop-shadow(0 0 18px rgba(0,245,255,0.4));
+		animation: titlePulse 3s steps(2) infinite;
+	}
+
+	.title-mayhem {
+		font-size: clamp(2rem, 8vw, 4rem);
+		background: linear-gradient(135deg, var(--magenta) 0%, var(--purple) 100%);
+		-webkit-background-clip: text;
+		-webkit-text-fill-color: transparent;
+		background-clip: text;
+		filter: drop-shadow(0 0 18px rgba(255,0,255,0.4));
+		animation: titlePulse 3s steps(2) infinite 1.5s;
+	}
+
+	@keyframes titlePulse {
+		50% { filter: drop-shadow(0 0 32px rgba(0,245,255,0.7)); }
+	}
+
+	.tagline {
+		font-size: 0.55rem;
+		color: var(--muted);
+		letter-spacing: 0.1em;
+		margin-bottom: 1.6rem;
+	}
+
+	/* ── Divider ── */
+	.divider {
+		display: flex;
+		align-items: center;
+		gap: 0.6rem;
+		width: 100%;
+		max-width: 340px;
+		margin-bottom: 1.6rem;
+	}
+
+	.divider span:not(.diamond) {
+		flex: 1;
+		height: 1px;
+		background: linear-gradient(90deg, transparent, var(--border), transparent);
+	}
+
+	.diamond {
+		font-size: 0.5rem;
+		color: var(--magenta);
+	}
+
+	.description {
+		font-size: 0.58rem;
+		line-height: 2.1;
+		color: var(--muted);
+		margin-bottom: 2rem;
+	}
+
+	/* ── CTA ── */
+	.cta-btn {
+		display: inline-flex;
+		align-items: center;
+		gap: 0.6rem;
+		font-family: inherit;
+		font-size: 0.6rem;
+		text-decoration: none;
+		padding: 0.9rem 2rem;
+		border-radius: 8px;
+		color: #020211;
+		background: linear-gradient(90deg, var(--cyan), var(--magenta));
+		border: none;
+		cursor: pointer;
+		margin-bottom: 2.5rem;
+		position: relative;
+		overflow: hidden;
+		transition: transform 0.1s steps(2), box-shadow 0.2s ease;
+	}
+
+	.cta-btn::after {
+		content: '';
+		position: absolute;
+		inset: 0;
+		background: linear-gradient(90deg, transparent 40%, rgba(255,255,255,0.18) 50%, transparent 60%);
+		transform: translateX(-100%);
+		transition: transform 0.5s ease;
+	}
+
+	.cta-btn:hover {
+		transform: translateY(-2px);
+		box-shadow: 0 0 24px rgba(0,245,255,0.45), 0 0 40px rgba(255,0,255,0.25);
+	}
+
+	.cta-btn:hover::after {
+		transform: translateX(100%);
+	}
+
+	.cta-icon { font-size: 0.9rem; }
+
+	/* ── Stats ── */
+	.stats-row {
+		display: flex;
+		align-items: center;
+		gap: 1.2rem;
+		padding: 0.8rem 1.6rem;
+		border: 1px solid var(--border);
+		border-radius: 12px;
+		background: rgba(18,18,26,0.8);
+	}
+
+	.stat {
+		display: flex;
+		flex-direction: column;
+		align-items: center;
+		gap: 0.4rem;
+	}
+
+	.stat-val {
+		font-size: 0.75rem;
+		color: var(--cyan);
+		min-width: 2ch;
+		text-align: center;
+	}
+
+	.stat-label {
+		font-size: 0.4rem;
+		color: var(--muted);
+		text-transform: uppercase;
+		letter-spacing: 0.1em;
+	}
+
+	.stat-sep {
+		color: var(--border);
+		font-size: 1rem;
+		align-self: stretch;
+		display: flex;
+		align-items: center;
+	}
+
+	/* ── Footer ── */
+	.footer {
+		z-index: 1;
+		text-align: center;
+		padding: 1.2rem;
+		font-size: 0.42rem;
+		color: var(--muted);
+		border-top: 1px solid var(--border);
+		display: flex;
+		justify-content: center;
+		gap: 0.6rem;
+	}
+
+	.footer a {
+		color: var(--cyan);
+		text-decoration: none;
+	}
+
+	.footer a:hover { color: var(--magenta); }
+
+	.sep { color: var(--border); }
+
+	/* ── Responsive ── */
+	@media (max-width: 480px) {
+		.title-mona,
+		.title-mayhem { font-size: 1.8rem; }
+
+		.stats-row { gap: 0.7rem; padding: 0.6rem 1rem; }
+
+		.cta-btn { font-size: 0.52rem; padding: 0.75rem 1.4rem; }
+	}
+</style>
